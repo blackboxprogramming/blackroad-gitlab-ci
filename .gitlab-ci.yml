@@ -1,0 +1,57 @@
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  BLACKROAD_API_URL: "https://api.blackroad.io/v1"
+
+before_script:
+  - echo "🚀 BlackRoad CI/CD Pipeline"
+
+# Deploy to BlackRoad
+deploy_production:
+  stage: deploy
+  only:
+    - main
+    - master
+  script:
+    - echo "📦 Deploying to BlackRoad..."
+    - |
+      RESPONSE=$(curl -s -X POST ${BLACKROAD_API_URL}/deployments \
+        -H "Authorization: Bearer ${BLACKROAD_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"name\": \"${CI_PROJECT_NAME}\",
+          \"source\": \"${CI_REPOSITORY_URL}\",
+          \"environment\": \"production\",
+          \"branch\": \"${CI_COMMIT_BRANCH}\",
+          \"commit\": \"${CI_COMMIT_SHA}\"
+        }")
+    - DEPLOYMENT_ID=$(echo $RESPONSE | jq -r '.id')
+    - DEPLOYMENT_URL=$(echo $RESPONSE | jq -r '.url')
+    - echo "✅ Deployed successfully!"
+    - echo "📦 Deployment ID: $DEPLOYMENT_ID"
+    - echo "🔗 URL: $DEPLOYMENT_URL"
+  environment:
+    name: production
+    url: https://$CI_PROJECT_NAME.blackroad.app
+
+deploy_staging:
+  stage: deploy
+  only:
+    - develop
+  script:
+    - echo "📦 Deploying to staging..."
+    - |
+      curl -s -X POST ${BLACKROAD_API_URL}/deployments \
+        -H "Authorization: Bearer ${BLACKROAD_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"name\": \"${CI_PROJECT_NAME}-staging\",
+          \"source\": \"${CI_REPOSITORY_URL}\",
+          \"environment\": \"staging\"
+        }"
+  environment:
+    name: staging
+    url: https://$CI_PROJECT_NAME-staging.blackroad.app
