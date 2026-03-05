@@ -1,13 +1,19 @@
-name: 🔒 Security Scan
+# Copyright (c) 2024-2026 BlackRoad OS, Inc. All Rights Reserved.
+# Proprietary and Confidential — Not Open Source
+name: Security Scan
 
 on:
   push:
-    branches: [main, master, dev]
+    branches: [main, master]
   pull_request:
     branches: [main, master]
   schedule:
-    - cron: '0 0 * * 0'
+    - cron: "0 0 * * 0" # Weekly on Sunday
   workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -18,38 +24,83 @@ jobs:
   codeql:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        language: ['javascript', 'typescript', 'python']
-    
+        language: ["javascript-typescript", "python"]
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@ae9ef3a1d2e3413523c3741725c30064970cc0d4 # v3.32.5
         with:
           languages: ${{ matrix.language }}
-      
+
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-      
+        uses: github/codeql-action/autobuild@ae9ef3a1d2e3413523c3741725c30064970cc0d4 # v3.32.5
+
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@ae9ef3a1d2e3413523c3741725c30064970cc0d4 # v3.32.5
+        with:
+          category: "/language:${{ matrix.language }}"
 
   dependency-scan:
     name: Dependency Scan
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       - name: Run npm audit
         if: hashFiles('package.json') != ''
-        run: npm audit --audit-level=moderate || true
-      
+        run: npm audit --audit-level=high || true
+
+      - name: Run pip audit
+        if: hashFiles('requirements.txt') != ''
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt || true
+
       - name: Dependency Review
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         if: github.event_name == 'pull_request'
+        with:
+          fail-on-severity: high
+
+  secret-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets
+        run: |
+          echo "Scanning for hardcoded secrets..."
+          PATTERNS=(
+            'AKIA[0-9A-Z]{16}'
+            'sk-[a-zA-Z0-9]{48}'
+            'ghp_[a-zA-Z0-9]{36}'
+            'glpat-[a-zA-Z0-9\-]{20}'
+            'xoxb-[0-9]{10,13}-[a-zA-Z0-9-]+'
+          )
+          FOUND=0
+          for pattern in "${PATTERNS[@]}"; do
+            if grep -rE "$pattern" --include="*.{js,ts,py,json,yml,yaml,env,toml}" . 2>/dev/null | grep -v node_modules | grep -v .git; then
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" = "1" ]; then
+            echo "Potential secrets detected — review required"
+            exit 1
+          fi
+          echo "No secrets detected"

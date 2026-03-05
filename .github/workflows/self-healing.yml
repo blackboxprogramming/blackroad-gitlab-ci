@@ -1,86 +1,121 @@
-name: 🔧 Self-Healing
+# Copyright (c) 2024-2026 BlackRoad OS, Inc. All Rights Reserved.
+# Proprietary and Confidential — Not Open Source
+name: Self-Healing
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Every 30 minutes
+    - cron: "*/30 * * * *" # Every 30 minutes
   workflow_dispatch:
   workflow_run:
-    workflows: ["🚀 Auto Deploy"]
+    workflows: ["Auto Deploy"]
     types: [completed]
+
+concurrency:
+  group: self-healing
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
 
 jobs:
   monitor:
     name: Monitor Deployments
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 2
+
       - name: Check Health
         id: health
         run: |
-          if [ ! -z "${{ secrets.DEPLOY_URL }}" ]; then
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.DEPLOY_URL }}/api/health || echo "000")
-            echo "status=$STATUS" >> $GITHUB_OUTPUT
-          else
+          DEPLOY_URL="${{ secrets.DEPLOY_URL }}"
+          if [ -z "$DEPLOY_URL" ]; then
             echo "status=skip" >> $GITHUB_OUTPUT
+            echo "No DEPLOY_URL configured, skipping health check"
+            exit 0
           fi
-      
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${DEPLOY_URL}/api/health" || echo "000")
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "Health check status: $STATUS"
+
       - name: Auto-Rollback
         if: steps.health.outputs.status != '200' && steps.health.outputs.status != 'skip'
         run: |
-          echo "🚨 Health check failed (Status: ${{ steps.health.outputs.status }})"
-          echo "Triggering rollback..."
-          gh workflow run auto-deploy.yml --ref $(git rev-parse HEAD~1)
+          echo "Health check failed (Status: ${{ steps.health.outputs.status }})"
+          PREV_SHA=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+          if [ -n "$PREV_SHA" ]; then
+            echo "Triggering rollback to $PREV_SHA..."
+            gh workflow run auto-deploy.yml --ref "$PREV_SHA"
+          else
+            echo "No previous commit available for rollback"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
-      
-      - name: Attempt Auto-Fix
-        if: steps.health.outputs.status != '200' && steps.health.outputs.status != 'skip'
-        run: |
-          echo "🔧 Attempting automatic fixes..."
-          # Check for common issues
-          if [ -f "package.json" ]; then
-            npm ci || true
-            npm run build || true
-          fi
-      
+
       - name: Create Issue on Failure
-        if: failure()
-        uses: actions/github-script@v7
+        if: steps.health.outputs.status != '200' && steps.health.outputs.status != 'skip'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
-            github.rest.issues.create({
+            const title = 'Self-Healing: Deployment Health Check Failed';
+            const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: '🚨 Self-Healing: Deployment Health Check Failed',
-              body: `Deployment health check failed.\n\nStatus: ${{ steps.health.outputs.status }}\nWorkflow: ${context.workflow}\nRun: ${context.runId}`,
-              labels: ['bug', 'deployment', 'auto-generated']
-            })
+              state: 'open',
+              labels: 'deployment-failure',
+              per_page: 1
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body: `Health check still failing.\n\nStatus: ${{ steps.health.outputs.status }}\nWorkflow: ${context.workflow}\nRun: ${context.runId}\nTime: ${new Date().toISOString()}`
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: `Deployment health check failed.\n\nStatus: ${{ steps.health.outputs.status }}\nWorkflow: ${context.workflow}\nRun: ${context.runId}\nTime: ${new Date().toISOString()}`,
+                labels: ['bug', 'deployment-failure', 'auto-generated']
+              });
+            }
 
   dependency-updates:
     name: Auto Update Dependencies
     runs-on: ubuntu-latest
-    
+    if: github.event_name == 'schedule'
+    timeout-minutes: 15
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Setup Node
         if: hashFiles('package.json') != ''
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '20'
-      
+          node-version: "20"
+
       - name: Update npm dependencies
         if: hashFiles('package.json') != ''
         run: |
-          npm update
-          if [ -n "$(git status --porcelain)" ]; then
+          npm update --save
+          if [ -n "$(git status --porcelain package*.json)" ]; then
             git config user.name "BlackRoad Bot"
             git config user.email "bot@blackroad.io"
-            git add package*.json
-            git commit -m "chore: auto-update dependencies"
+            git add package.json package-lock.json
+            git commit -m "chore: auto-update dependencies [skip ci]"
             git push
+          else
+            echo "No dependency updates available"
           fi

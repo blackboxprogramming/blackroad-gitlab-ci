@@ -1,3 +1,4 @@
+# Copyright (c) 2024-2026 BlackRoad OS, Inc. All Rights Reserved.
 version: 2
 updates:
   # npm dependencies
@@ -6,15 +7,23 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+      time: "06:00"
+      timezone: "America/Chicago"
     open-pull-requests-limit: 10
     reviewers:
       - "blackboxprogramming"
     labels:
       - "dependencies"
       - "automated"
+      - "automerge"
     commit-message:
       prefix: "chore"
       include: "scope"
+    groups:
+      production-deps:
+        dependency-type: "production"
+      dev-deps:
+        dependency-type: "development"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
@@ -22,10 +31,15 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+      time: "06:00"
+      timezone: "America/Chicago"
     open-pull-requests-limit: 5
+    reviewers:
+      - "blackboxprogramming"
     labels:
       - "dependencies"
       - "github-actions"
+      - "automerge"
     commit-message:
       prefix: "ci"
 
@@ -35,9 +49,14 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+      time: "06:00"
+      timezone: "America/Chicago"
     open-pull-requests-limit: 10
+    reviewers:
+      - "blackboxprogramming"
     labels:
       - "dependencies"
       - "python"
+      - "automerge"
     commit-message:
       prefix: "chore"

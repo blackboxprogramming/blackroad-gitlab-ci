@@ -1,0 +1,98 @@
+# Copyright (c) 2024-2026 BlackRoad OS, Inc. All Rights Reserved.
+# Proprietary and Confidential — Not Open Source
+name: Cloudflare Worker Deploy
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "workers/**"
+      - "wrangler.toml"
+      - "wrangler.jsonc"
+  workflow_dispatch:
+    inputs:
+      worker_name:
+        description: "Worker name to deploy (blank = all)"
+        required: false
+        type: string
+
+concurrency:
+  group: worker-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  deploy-worker:
+    name: Deploy Cloudflare Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install Dependencies
+        if: hashFiles('package.json') != ''
+        run: npm ci
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy ${{ inputs.worker_name && format('--name {0}', inputs.worker_name) || '' }}
+
+      - name: Verify Deployment
+        if: secrets.DEPLOY_URL != ''
+        run: |
+          sleep 10
+          URL="${{ secrets.DEPLOY_URL }}"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$URL" || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "Worker deployment verified successfully"
+          else
+            echo "Warning: Worker health check returned status $STATUS"
+          fi
+
+  deploy-cron-worker:
+    name: Deploy Cron Worker (Long Tasks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: hashFiles('workers/cron/**') != ''
+    environment:
+      name: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Dependencies
+        working-directory: workers/cron
+        run: npm ci
+
+      - name: Deploy Cron Worker
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/cron
+          command: deploy

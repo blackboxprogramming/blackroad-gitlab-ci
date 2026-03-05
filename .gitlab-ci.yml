@@ -1,24 +1,44 @@
+# Copyright (c) 2024-2026 BlackRoad OS, Inc. All Rights Reserved.
+# Proprietary and Confidential — Not Open Source
+
 stages:
+  - validate
   - build
   - test
   - deploy
 
 variables:
   BLACKROAD_API_URL: "https://api.blackroad.io/v1"
+  DEPLOY_TIMEOUT: "300"
 
 before_script:
-  - echo "🚀 BlackRoad CI/CD Pipeline"
+  - echo "BlackRoad CI/CD Pipeline — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-# Deploy to BlackRoad
+# Validate configuration
+validate:
+  stage: validate
+  script:
+    - echo "Validating deployment configuration..."
+    - |
+      if [ -z "$BLACKROAD_API_KEY" ]; then
+        echo "ERROR: BLACKROAD_API_KEY is not set"
+        exit 1
+      fi
+    - echo "Configuration valid"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"'
+
+# Deploy to production
 deploy_production:
   stage: deploy
-  only:
-    - main
-    - master
+  needs: ["validate"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"'
   script:
-    - echo "📦 Deploying to BlackRoad..."
+    - echo "Deploying to production..."
     - |
-      RESPONSE=$(curl -s -X POST ${BLACKROAD_API_URL}/deployments \
+      RESPONSE=$(curl -sf -X POST "${BLACKROAD_API_URL}/deployments" \
+        --max-time "$DEPLOY_TIMEOUT" \
         -H "Authorization: Bearer ${BLACKROAD_API_KEY}" \
         -H "Content-Type: application/json" \
         -d "{
@@ -28,30 +48,50 @@ deploy_production:
           \"branch\": \"${CI_COMMIT_BRANCH}\",
           \"commit\": \"${CI_COMMIT_SHA}\"
         }")
-    - DEPLOYMENT_ID=$(echo $RESPONSE | jq -r '.id')
-    - DEPLOYMENT_URL=$(echo $RESPONSE | jq -r '.url')
-    - echo "✅ Deployed successfully!"
-    - echo "📦 Deployment ID: $DEPLOYMENT_ID"
-    - echo "🔗 URL: $DEPLOYMENT_URL"
+    - DEPLOYMENT_ID=$(echo "$RESPONSE" | jq -r '.id')
+    - DEPLOYMENT_URL=$(echo "$RESPONSE" | jq -r '.url')
+    - |
+      if [ "$DEPLOYMENT_ID" = "null" ] || [ -z "$DEPLOYMENT_ID" ]; then
+        echo "ERROR: Deployment failed — no deployment ID returned"
+        echo "Response: $RESPONSE"
+        exit 1
+      fi
+    - echo "Deployed successfully"
+    - echo "Deployment ID: $DEPLOYMENT_ID"
+    - echo "URL: $DEPLOYMENT_URL"
   environment:
     name: production
     url: https://$CI_PROJECT_NAME.blackroad.app
+  after_script:
+    - echo "Production deployment completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# Deploy to staging
 deploy_staging:
   stage: deploy
-  only:
-    - develop
+  needs: ["validate"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
   script:
-    - echo "📦 Deploying to staging..."
+    - echo "Deploying to staging..."
     - |
-      curl -s -X POST ${BLACKROAD_API_URL}/deployments \
+      RESPONSE=$(curl -sf -X POST "${BLACKROAD_API_URL}/deployments" \
+        --max-time "$DEPLOY_TIMEOUT" \
         -H "Authorization: Bearer ${BLACKROAD_API_KEY}" \
         -H "Content-Type: application/json" \
         -d "{
           \"name\": \"${CI_PROJECT_NAME}-staging\",
           \"source\": \"${CI_REPOSITORY_URL}\",
-          \"environment\": \"staging\"
-        }"
+          \"environment\": \"staging\",
+          \"branch\": \"${CI_COMMIT_BRANCH}\",
+          \"commit\": \"${CI_COMMIT_SHA}\"
+        }")
+    - DEPLOYMENT_ID=$(echo "$RESPONSE" | jq -r '.id')
+    - |
+      if [ "$DEPLOYMENT_ID" = "null" ] || [ -z "$DEPLOYMENT_ID" ]; then
+        echo "ERROR: Staging deployment failed"
+        exit 1
+      fi
+    - echo "Staging deployed: $DEPLOYMENT_ID"
   environment:
     name: staging
     url: https://$CI_PROJECT_NAME-staging.blackroad.app
